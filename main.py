@@ -78,12 +78,15 @@ def selected_stages(only=None, start_at=None, skip=None):
     return stages
 
 
-def run_batch(only=None, start_at=None, skip=None, data_path=None):
+def run_batch(only=None, start_at=None, skip=None, data_path=None, resume=False):
     """Preprocessing run: process all test data through every stage.
 
     ``data_path`` (optional) overrides the default fixture path; it is only
     consumed by ``claim-extraction``, which is the one stage that reads the
     source JSON. Downstream stages operate on rows already in the DB.
+
+    ``resume`` (optional) is forwarded only to ``claim-extraction`` so a
+    crashed batch can pick up from the last completed post.
     """
     stages = selected_stages(only=only, start_at=start_at, skip=skip)
     if not stages:
@@ -93,8 +96,11 @@ def run_batch(only=None, start_at=None, skip=None, data_path=None):
     logger.info("Starting batch pipeline stages: %s", stage_names)
     for name, label, run_stage in stages:
         logger.info(label)
-        if name == "claim-extraction" and data_path is not None:
-            run_stage(data_path=data_path)
+        if name == "claim-extraction":
+            kwargs = {"resume": resume}
+            if data_path is not None:
+                kwargs["data_path"] = data_path
+            run_stage(**kwargs)
         else:
             run_stage()
     logger.info("Finished batch pipeline stages: %s", stage_names)
@@ -202,12 +208,22 @@ def parse_args():
         "--data-path",
         help="Override the source JSON fixture for claim-extraction (e.g. test_data/mastodon_real.json).",
     )
+    batch_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip claim-extraction posts already marked done; pick up where a prior crashed run left off.",
+    )
 
     stage_parser = subparsers.add_parser("stage", help="Run one batch pipeline stage")
     stage_parser.add_argument("name", choices=STAGE_NAMES)
     stage_parser.add_argument(
         "--data-path",
         help="Override the source JSON fixture (only used by claim-extraction).",
+    )
+    stage_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a crashed claim-extraction run; ignored by other stages.",
     )
 
     process_parser = subparsers.add_parser("process", help="Process one post JSON")
@@ -227,8 +243,9 @@ if __name__ == "__main__":
             start_at=args.from_stage,
             skip=args.skip,
             data_path=args.data_path,
+            resume=args.resume,
         )
     elif args.command == "stage":
-        run_batch(only=args.name, data_path=args.data_path)
+        run_batch(only=args.name, data_path=args.data_path, resume=args.resume)
     else:
         run_batch()

@@ -1,8 +1,9 @@
 """ORM models and field enums."""
 
+from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Enum, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -84,6 +85,7 @@ class Post(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     topic_id: Mapped[str | None] = mapped_column(ForeignKey("topics.id"))
     topic_label: Mapped[str | None] = mapped_column(String)
+    claims_extracted_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     topic: Mapped["Topic | None"] = relationship(back_populates="posts")
     arguments: Mapped[list["ArgumentInstance"]] = relationship(back_populates="post")

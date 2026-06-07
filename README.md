@@ -149,6 +149,34 @@ killing it, so the run resumes when you wake the laptop. For uninterrupted
 runs, leave the lid open on AC power or use clamshell mode (external monitor,
 power, keyboard/mouse all connected).
 
+### Resume a crashed claim-extraction run
+
+`claim-extraction` records a `claims_extracted_at` timestamp on each post as
+soon as it finishes processing it (whether the post produced claims or not).
+Re-run with `--resume` to skip those and only process the remainder:
+
+```bash
+docker compose exec pipeline python main.py stage claim-extraction --resume
+# or, to continue with all downstream stages after the resumed extraction:
+docker compose exec pipeline python main.py batch --resume
+```
+
+If the LLM returns malformed JSON for a post (e.g. truncated output), that
+single post is logged as a warning, recorded in
+`data/claim_extraction.failures.json`, treated as zero claims, and marked done
+so the batch keeps moving. Inspect that file later to retry by hand.
+
+The `claims_extracted_at` column was added in a later revision. If your
+`data/pipeline.db` predates it, add the column once before the first
+`--resume` run:
+
+```bash
+sqlite3 data/pipeline.db "ALTER TABLE posts ADD COLUMN claims_extracted_at DATETIME"
+```
+
+A truly fresh DB (`rm -rf data` then a normal run) does not need the manual
+ALTER; SQLAlchemy creates the column from the model on first connect.
+
 ## Run Individual Pipeline Stages
 
 ```bash

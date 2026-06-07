@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import datetime
 
 import numpy as np
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -22,21 +23,39 @@ OUTLIER_TOPIC_ID = -1
 
 
 def insert_posts(conn, posts):
-    """Insert or refresh posts by id."""
+    """Insert or refresh posts by id.
+
+    Existing rows have their text refreshed but keep any prior topic
+    assignments and claim-extraction markers, so re-running claim extraction
+    in resume mode does not undo work from later stages.
+    """
     rows = [{"id": p[Field.ID], "text": p[Field.TEXT]} for p in posts]
     if rows:
         stmt = sqlite_insert(Post).values(rows)
         conn.execute(
             stmt.on_conflict_do_update(
                 index_elements=[Post.id],
-                set_={
-                    Post.text: stmt.excluded.text,
-                    Post.topic_id: None,
-                    Post.topic_label: None,
-                },
+                set_={Post.text: stmt.excluded.text},
             )
         )
         conn.commit()
+
+
+def mark_post_claims_extracted(conn, post_id):
+    """Stamp a post as having been processed by claim extraction."""
+    post = conn.get(Post, post_id)
+    if post is not None:
+        post.claims_extracted_at = datetime.utcnow()
+        conn.commit()
+
+
+def clear_claim_extraction_markers(conn):
+    """Clear the claims_extracted_at marker for every post."""
+    conn.query(Post).update(
+        {Post.claims_extracted_at: None},
+        synchronize_session=False,
+    )
+    conn.commit()
 
 
 def write_topic_assignments_for_claims(conn, clusters):

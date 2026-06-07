@@ -1,18 +1,29 @@
 """Stage 1: extract opinion claims and topic sentences from posts (topic-agnostic)."""
 
+import json
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-import logging
+from datetime import datetime
+from pathlib import Path
 from time import monotonic
 
-from config import LLM_CONCURRENCY
-from db import Field, connect
-from db.writes import clear_claim_extractions, insert_posts, store_claims
-from pipeline.utils.llm import chat_completion
+from config import DB_PATH, LLM_CONCURRENCY
+from db import Field, Post, connect
+from db.writes import (
+    clear_claim_extraction_markers,
+    clear_claim_extractions,
+    insert_posts,
+    mark_post_claims_extracted,
+    store_claims,
+)
+from pipeline.utils.llm import LLMResponseError, chat_completion
 from pipeline.utils.post_parsing import normalize_posts
 from pipeline.topic_clustering import load_posts
 
 logger = logging.getLogger(__name__)
+
+FAILURES_PATH = Path(DB_PATH).parent / "claim_extraction.failures.json"
 
 CLAIM_SCHEMA = {
     "type": "object",
@@ -106,6 +117,24 @@ def log_progress(progress, label):
     )
 
 
+def record_failed_post(post_id, message):
+    """Append a failure record so it can be inspected and retried by hand."""
+    entries = []
+    if FAILURES_PATH.exists():
+        entries = json.loads(FAILURES_PATH.read_text())
+    if any(entry["post_id"] == post_id for entry in entries):
+        return
+    entries.append(
+        {
+            "post_id": post_id,
+            "error": message,
+            "at": datetime.utcnow().isoformat() + "Z",
+        }
+    )
+    FAILURES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FAILURES_PATH.write_text(json.dumps(entries, indent=2))
+
+
 def extract_claims(post_text):
     """Send a post to the local LLM and return ``[{text, topic_sentence}]``.
 
@@ -135,54 +164,97 @@ def extract_claims(post_text):
     return cleaned
 
 
-def run_batch(data_path=None):
+def run_batch(data_path=None, resume=False):
     """Extract claims from every post in the test data and persist them.
 
     ``data_path`` overrides the default fixture file in ``config.TEST_DATA_PATH``;
     use it to point the pipeline at a different ``{"version": 1, "statuses": [...]}``
     JSON file (e.g. one produced by ``fetch_mastodon.py``).
+
+    When ``resume=True``, prior claims and per-post markers are kept, and only
+    posts whose ``claims_extracted_at`` is NULL are processed. A malformed LLM
+    response for a single post is logged, recorded to
+    ``data/claim_extraction.failures.json``, and treated as zero claims so the
+    rest of the batch can finish.
     """
     start = monotonic()
-    logger.info("Starting claim extraction batch")
+    logger.info("Starting claim extraction batch (resume=%s)", resume)
     conn = connect()
     statuses = load_posts(data_path) if data_path else load_posts()
     posts = normalize_posts(statuses)
 
-    logger.info("Clearing prior claim, topic, cluster, and statement data")
-    clear_claim_extractions(conn)
+    if not resume:
+        logger.info("Clearing prior claim, topic, cluster, and statement data")
+        clear_claim_extractions(conn)
+        clear_claim_extraction_markers(conn)
 
     logger.info("Inserting %d posts", len(posts))
     insert_posts(conn, posts)
 
-    progress = BatchProgress(total=len(posts), start_time=start)
+    if resume:
+        done_ids = {
+            row[0]
+            for row in conn.query(Post.id)
+            .filter(Post.claims_extracted_at.isnot(None))
+            .all()
+        }
+        pending = [post for post in posts if post[Field.ID] not in done_ids]
+        logger.info(
+            "Resuming: %d/%d posts already done, %d remaining",
+            len(done_ids),
+            len(posts),
+            len(pending),
+        )
+    else:
+        pending = list(posts)
+
+    if not pending:
+        conn.close()
+        logger.info("Nothing to do; all posts already have claims_extracted_at set")
+        return
+
+    progress = BatchProgress(total=len(pending), start_time=start)
     total_claims = 0
     posts_with_claims = 0
+    failed_posts = 0
     logger.info(
         "Extracting claims for %d posts with concurrency=%d",
-        len(posts),
+        len(pending),
         LLM_CONCURRENCY,
     )
     with ThreadPoolExecutor(max_workers=LLM_CONCURRENCY) as pool:
         future_to_post = {
-            pool.submit(extract_claims, post[Field.TEXT]): post for post in posts
+            pool.submit(extract_claims, post[Field.TEXT]): post for post in pending
         }
         for index, future in enumerate(as_completed(future_to_post), start=1):
             post = future_to_post[future]
-            claims = future.result()
+            try:
+                claims = future.result()
+            except LLMResponseError as e:
+                logger.warning(
+                    "post %s: %s; recording 0 claims and continuing",
+                    post[Field.ID],
+                    e,
+                )
+                record_failed_post(post[Field.ID], str(e))
+                failed_posts += 1
+                claims = []
             if claims:
                 posts_with_claims += 1
                 total_claims += len(claims)
                 store_claims(conn, post[Field.ID], claims)
+            mark_post_claims_extracted(conn, post[Field.ID])
             log_progress(
                 progress,
-                f"post {index}/{len(posts)} {post[Field.ID]} ({len(claims)} claims)",
+                f"post {index}/{len(pending)} {post[Field.ID]} ({len(claims)} claims)",
             )
 
     conn.close()
     logger.info(
-        "Finished claim extraction batch in %s: %d posts, %d with claims, %d total claims",
+        "Finished claim extraction batch in %s: %d posts, %d with claims, %d total claims, %d failed",
         format_duration(monotonic() - start),
-        len(posts),
+        len(pending),
         posts_with_claims,
         total_claims,
+        failed_posts,
     )

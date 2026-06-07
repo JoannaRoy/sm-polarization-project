@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 PROVIDER_LLAMAFILE = "llamafile"
 PROVIDER_OPENAI = "openai"
 
+
+class LLMResponseError(Exception):
+    """The LLM returned a response we could not consume (e.g. malformed JSON)."""
+
 # (connect_timeout, read_timeout). Connect is short so an unreachable backend
 # fails fast; read is generous because grammar-constrained CPU generation can
 # take a while on a local model.
@@ -104,4 +108,9 @@ def chat_completion(messages, schema, timeout=DEFAULT_LLM_TIMEOUT):
     )
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        raise LLMResponseError(
+            f"LLM returned malformed JSON ({e.msg} at char {e.pos})"
+        ) from e
