@@ -25,15 +25,15 @@ The dev server proxies `/topics`, `/topics/{id}`, `/match-post-topics`, and
 The frontend has two pages:
 
 - **Generate** — paste a post, pick from the 3-5 closest topics (by centroid
-  similarity), and get back the precomputed for/against slates for the topic
-  you choose. The response is a bulleted list of GEN/DISC slate statements
-  per side, not a single synthesized sentence. The two-step flow lets you
-  correct the framing when the top match isn't quite right.
+  similarity), and get back the precomputed agree/disagree slates for the
+  topic you choose. The response is a bulleted list of GEN/DISC slate
+  statements per side, not a single synthesized sentence. The two-step flow
+  lets you correct the framing when the top match isn't quite right.
 - **Graph** — sidebar of available topics with status pills, and a
-  click-to-expand view (topic → for/against → cluster → individual arguments).
-  Each cluster and each FOR/AGAINST side displays its slate of representative
-  statements. Topics without clusters or polarity slates yet are flagged, so
-  you can see pipeline progress mid-batch.
+  click-to-expand view (topic → sub-topic → agree/disagree → individual
+  arguments). Each AGREE/DISAGREE side displays its slate of representative
+  statements. Topics without sub-topics or polarity slates yet are flagged,
+  so you can see pipeline progress mid-batch.
 
 ## Build
 
@@ -244,7 +244,7 @@ similarity to each topic's centroid:
 ```
 
 ```bash
-# Step 2: fetch the templated FOR/AGAINST paragraph for the chosen topic.
+# Step 2: fetch the templated AGREE/DISAGREE paragraph for the chosen topic.
 curl http://localhost:8000/topic-response/3
 ```
 

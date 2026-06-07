@@ -2,14 +2,14 @@ import { useRef } from "react";
 
 import type {
   Argument,
-  Cluster,
   Polarity,
   RepresentativeStatement,
+  SubTopicDetail,
   TopicDetail,
   TopicSummary,
 } from "../api";
 
-type NodeKind = "root" | "topic" | "polarity" | "cluster" | "argument";
+type NodeKind = "root" | "topic" | "subtopic" | "polarity" | "argument";
 
 interface VNode {
   id: string;
@@ -17,6 +17,7 @@ interface VNode {
   label: string;
   sub?: string;
   polarity?: Polarity;
+  descriptive?: boolean;
   loading?: boolean;
   error?: string;
   children: () => VNode[];
@@ -41,21 +42,24 @@ export type DetailState =
 
 // Heights are conservative minimums; CSS enforces min-height so the visible
 // rect is always >= these values. Edge endpoints will then always fall inside
-// (or exactly on) the rendered card, where the opaque background hides any
-// overshoot. If text wraps and the card grows taller, the line just ends
-// slightly inside the box, which still looks like it touches.
+// the rendered card.
 const NODE_SIZES: Record<NodeKind, { width: number; height: number }> = {
   root: { width: 220, height: 60 },
   topic: { width: 260, height: 60 },
-  polarity: { width: 380, height: 140 },
-  cluster: { width: 380, height: 160 },
+  subtopic: { width: 380, height: 140 },
+  polarity: { width: 380, height: 160 },
   argument: { width: 320, height: 80 },
 };
 const TOPIC_RADIUS = 380;
 const DEPTH_SPACING = 520;
-const PERP_SPACING = 280;
+// Sub-topics under a topic alternate their radial distance from the topic
+// node by this amount. The zig-zag means adjacent sub-topics are spread
+// along the topic's ray instead of stacked perpendicular, so we can pack
+// them tighter along the perpendicular axis without nodes overlapping.
+const SUBTOPIC_RADIAL_STAGGER = 400;
+const PERP_SPACING = 120;
 const MAX_RAY_DEPTH = 3;
-const CANVAS_SIZE = 5400;
+const CANVAS_SIZE = 12000;
 const CENTER = CANVAS_SIZE / 2;
 const ROOT_ID = "root";
 const DRAG_THRESHOLD = 4;
@@ -66,9 +70,12 @@ const WHEEL_ZOOM_SENSITIVITY = 0.01;
 
 export type NodeOffset = { dx: number; dy: number };
 
-function buildArgumentNode(arg: Argument): VNode {
+function buildArgumentNode(parentId: string, arg: Argument): VNode {
+  // Namespace the node id by parent so the same arg id can never collide if
+  // it ever shows up under two parents (defensive — collectEdges keys by
+  // node.id, and collisions would orphan edges).
   return {
-    id: `arg:${arg.id}`,
+    id: `${parentId}/arg:${arg.id}`,
     kind: "argument",
     label: arg.text,
     sub: `post ${arg.post_id}`,
@@ -82,38 +89,67 @@ function formatSlate(slate: RepresentativeStatement[], emptyLabel: string): stri
   return ordered.map((row, i) => `${i + 1}. ${row.statement}`).join("\n");
 }
 
-function buildClusterNode(cluster: Cluster): VNode {
+const POLARITY_LABEL: Record<Polarity, string> = {
+  agree: "AGREE",
+  disagree: "DISAGREE",
+};
+
+function buildPolarityNode(
+  subTopicId: string,
+  polarity: Polarity,
+  subTopic: SubTopicDetail,
+): VNode {
+  const slate =
+    polarity === "agree" ? subTopic.agree_slate : subTopic.disagree_slate;
+  const claims = subTopic.arguments.filter((a) => a.polarity === polarity);
+  const polarityId = `pol:${subTopicId}:${polarity}`;
   return {
-    id: `cluster:${cluster.id}`,
-    kind: "cluster",
-    polarity: cluster.polarity,
-    label: formatSlate(
-      cluster.representative_statements,
-      "(no cluster slate yet)",
-    ),
-    sub: `${cluster.arguments.length} argument${cluster.arguments.length === 1 ? "" : "s"}`,
-    children: () => cluster.arguments.map(buildArgumentNode),
+    id: polarityId,
+    kind: "polarity",
+    polarity,
+    label: POLARITY_LABEL[polarity],
+    sub: formatSlate(slate, "(no slate yet)"),
+    children: () => claims.map((c) => buildArgumentNode(polarityId, c)),
   };
 }
 
-function buildPolarityNode(
-  topicId: string,
-  polarity: Polarity,
-  data: TopicDetail,
-): VNode {
-  const clusters = data.clusters.filter((c) => c.polarity === polarity);
-  const slate =
-    data.polarity_slates.find((s) => s.polarity === polarity)
-      ?.representative_statements ?? [];
-  const clusterCount = `${clusters.length} cluster${clusters.length === 1 ? "" : "s"}`;
+function buildSubTopicNode(topicId: string, subTopic: SubTopicDetail): VNode {
+  const descriptive = subTopic.polarity_target === null;
+  const claimCount = `${subTopic.count} claim${subTopic.count === 1 ? "" : "s"}`;
+  const sub = descriptive
+    ? `descriptive · ${claimCount}`
+    : `${subTopic.polarity_target}\n${claimCount}`;
   return {
-    id: `pol:${topicId}:${polarity}`,
-    kind: "polarity",
-    polarity,
-    label: polarity.toUpperCase(),
-    sub: slate.length > 0 ? formatSlate(slate, clusterCount) : clusterCount,
-    children: () => clusters.map(buildClusterNode),
+    id: `sub:${topicId}:${subTopic.id}`,
+    kind: "subtopic",
+    label: subTopic.label,
+    sub,
+    descriptive,
+    children: () =>
+      descriptive
+        ? []
+        : [
+            buildPolarityNode(subTopic.id, "agree", subTopic),
+            buildPolarityNode(subTopic.id, "disagree", subTopic),
+          ],
   };
+}
+
+function subTopicSubtitle(
+  topic: TopicSummary,
+  detail: DetailState | undefined,
+): string {
+  const args = `${topic.argument_count} argument${topic.argument_count === 1 ? "" : "s"}`;
+  if (detail?.kind !== "ready") {
+    const n = topic.sub_topic_count;
+    return `${n} sub-topic${n === 1 ? "" : "s"} · ${args}`;
+  }
+  const shown = detail.data.sub_topics.length;
+  const total = detail.data.total_sub_topic_count;
+  if (shown < total) {
+    return `showing top ${shown} of ${total} sub-topics · ${args}`;
+  }
+  return `${total} sub-topic${total === 1 ? "" : "s"} · ${args}`;
 }
 
 function buildTopicNode(
@@ -124,15 +160,12 @@ function buildTopicNode(
     id: `topic:${topic.id}`,
     kind: "topic",
     label: topic.label,
-    sub: `${topic.cluster_count} clusters · ${topic.argument_count} arguments`,
+    sub: subTopicSubtitle(topic, detail),
     loading: detail?.kind === "loading",
     error: detail?.kind === "error" ? detail.message : undefined,
     children: () => {
       if (detail?.kind !== "ready") return [];
-      return [
-        buildPolarityNode(topic.id, "for", detail.data),
-        buildPolarityNode(topic.id, "against", detail.data),
-      ];
+      return detail.data.sub_topics.map((s) => buildSubTopicNode(topic.id, s));
     },
   };
 }
@@ -157,8 +190,6 @@ interface LocalPos {
   depth: number;
 }
 
-// Lay out an expanded topic's subtree as a horizontal tree in local coords:
-// lx grows outward along the ray (depth), ly is perpendicular sibling spread.
 function layoutRay(
   node: VNode,
   localDepth: number,
@@ -173,12 +204,19 @@ function layoutRay(
   const totalHeight = subtrees.reduce((s, t) => s + t.height, 0);
   let cursor = -totalHeight / 2;
   const positions: LocalPos[] = [];
+  const staggerChildren = localDepth === 0;
   for (let i = 0; i < children.length; i++) {
     const subtree = subtrees[i];
     const offsetY = cursor + subtree.height / 2;
     cursor += subtree.height;
+    const radialBump = staggerChildren && i % 2 === 1 ? SUBTOPIC_RADIAL_STAGGER : 0;
     for (const p of subtree.positions) {
-      positions.push({ node: p.node, lx: p.lx, ly: p.ly + offsetY, depth: p.depth });
+      positions.push({
+        node: p.node,
+        lx: p.lx + radialBump,
+        ly: p.ly + offsetY,
+        depth: p.depth,
+      });
     }
   }
   positions.push({ node, lx, ly: 0, depth: localDepth });
@@ -225,15 +263,34 @@ function collectEdges(positions: Pos[], expanded: Set<string>): Edge[] {
   return edges;
 }
 
+function cumulativeOffset(
+  nodeId: string,
+  offsets: Map<string, NodeOffset>,
+  parentById: Map<string, string>,
+): NodeOffset {
+  let dx = 0;
+  let dy = 0;
+  let id: string | undefined = nodeId;
+  while (id) {
+    const o = offsets.get(id);
+    if (o) {
+      dx += o.dx;
+      dy += o.dy;
+    }
+    id = parentById.get(id);
+  }
+  return { dx, dy };
+}
+
 function effectivePos(
   pos: Pos,
   offsets: Map<string, NodeOffset>,
+  parentById: Map<string, string>,
 ): { x: number; y: number } {
-  const o = offsets.get(pos.node.id);
-  return o ? { x: pos.x + o.dx, y: pos.y + o.dy } : { x: pos.x, y: pos.y };
+  const o = cumulativeOffset(pos.node.id, offsets, parentById);
+  return { x: pos.x + o.dx, y: pos.y + o.dy };
 }
 
-// Where a line from `inside` toward `toward` exits the rect centered on `inside`.
 function rectEdgePoint(
   inside: { x: number; y: number },
   toward: { x: number; y: number },
@@ -252,9 +309,10 @@ function rectEdgePoint(
 function edgePath(
   edge: Edge,
   offsets: Map<string, NodeOffset>,
+  parentById: Map<string, string>,
 ): string {
-  const from = effectivePos(edge.from, offsets);
-  const to = effectivePos(edge.to, offsets);
+  const from = effectivePos(edge.from, offsets, parentById);
+  const to = effectivePos(edge.to, offsets, parentById);
   const fromSize = NODE_SIZES[edge.from.node.kind];
   const toSize = NODE_SIZES[edge.to.node.kind];
   const start = rectEdgePoint(from, to, fromSize.width / 2, fromSize.height / 2);
@@ -264,8 +322,8 @@ function edgePath(
 
 function edgeClass(edge: Edge): string {
   const polarity = edge.to.node.polarity;
-  if (polarity === "for") return "graph-edge for";
-  if (polarity === "against") return "graph-edge against";
+  if (polarity === "agree") return "graph-edge agree";
+  if (polarity === "disagree") return "graph-edge disagree";
   return "graph-edge";
 }
 
@@ -300,14 +358,14 @@ export function GraphView({
   const percentRef = useRef<HTMLButtonElement | null>(null);
   const didScroll = useRef(false);
   const dragState = useRef<DragState | null>(null);
-  // Scale lives in a ref, not state: we apply it directly to the DOM in a
-  // single synchronous block alongside the scroll-position correction so the
-  // zoom anchor stays locked under the cursor with no inter-frame jitter.
-  const scaleRef = useRef(1);
+  const scaleRef = useRef(0.35);
 
   const root = buildRoot(topics, details);
   const positions = buildPositions(root, expanded);
   const edges = collectEdges(positions, expanded);
+  
+  const parentById = new Map<string, string>();
+  for (const e of edges) parentById.set(e.to.node.id, e.from.node.id);
 
   const writeScaleToDom = (next: number) => {
     const sizer = sizerRef.current;
@@ -342,14 +400,13 @@ export function GraphView({
 
   const resetZoom = () => {
     const el = canvasRef.current;
-    scaleRef.current = 1;
-    writeScaleToDom(1);
+    scaleRef.current = 0.35;
+    writeScaleToDom(0.35);
     if (!el) return;
-    el.scrollLeft = (CANVAS_SIZE - el.clientWidth) / 2;
-    el.scrollTop = (CANVAS_SIZE - el.clientHeight) / 2;
+    el.scrollLeft = (CANVAS_SIZE * 0.35 - el.clientWidth) / 2;
+    el.scrollTop = (CANVAS_SIZE * 0.35 - el.clientHeight) / 2;
   };
 
-  // Stable native wheel listener; reads scale from ref so identity never changes.
   const wheelListener = useRef<((e: WheelEvent) => void) | null>(null);
   if (!wheelListener.current) {
     wheelListener.current = (event) => {
@@ -358,7 +415,6 @@ export function GraphView({
       const el = canvasRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      // Smooth, delta-proportional zoom so trackpad pinch + mouse wheel both feel calm.
       const factor = Math.exp(-event.deltaY * WHEEL_ZOOM_SENSITIVITY);
       applyZoomRef.current(factor, event.clientX - rect.left, event.clientY - rect.top);
     };
@@ -456,22 +512,26 @@ export function GraphView({
                 <path
                   key={i}
                   className={edgeClass(edge)}
-                  d={edgePath(edge, offsets)}
+                  d={edgePath(edge, offsets, parentById)}
                 />
               ))}
             </svg>
             {positions.map((p) => {
               const topicId =
                 p.node.kind === "topic" ? p.node.id.slice("topic:".length) : undefined;
-              const offset = offsets.get(p.node.id) ?? { dx: 0, dy: 0 };
+              // Own offset drives drag deltas; cumulative offset (own + all
+              // ancestors) drives where the node is actually drawn so children
+              // follow when an ancestor is dragged.
+              const ownOffset = offsets.get(p.node.id) ?? { dx: 0, dy: 0 };
+              const cum = cumulativeOffset(p.node.id, offsets, parentById);
               return (
                 <NodeCard
                   key={p.node.id}
                   node={p.node}
-                  x={p.x + offset.dx}
-                  y={p.y + offset.dy}
+                  x={p.x + cum.dx}
+                  y={p.y + cum.dy}
                   width={NODE_SIZES[p.node.kind].width}
-                  baseOffset={offset}
+                  baseOffset={ownOffset}
                   open={expanded.has(p.node.id)}
                   highlighted={p.node.id === highlightId}
                   scaleRef={scaleRef}
@@ -537,8 +597,12 @@ function NodeCard({
 }) {
   const dragRef = useRef<NodeDragState | null>(null);
   const polarityClass = node.polarity ? ` ${node.polarity}` : "";
+  const descriptiveClass = node.descriptive ? " descriptive" : "";
+  // Descriptive sub-topics have no children, so do not show a toggle.
   const isToggleable =
-    node.kind !== "root" && node.kind !== "argument";
+    node.kind !== "root" &&
+    node.kind !== "argument" &&
+    !(node.kind === "subtopic" && node.descriptive);
   const chevron = node.loading
     ? "…"
     : isToggleable
@@ -587,7 +651,7 @@ function NodeCard({
     <div
       role={isToggleable ? "button" : undefined}
       tabIndex={isToggleable ? 0 : undefined}
-      className={`graph-node ${node.kind}${polarityClass}${open ? " open" : ""}${highlighted ? " highlighted" : ""}${isToggleable ? "" : " leaf"}`}
+      className={`graph-node ${node.kind}${polarityClass}${descriptiveClass}${open ? " open" : ""}${highlighted ? " highlighted" : ""}${isToggleable ? "" : " leaf"}`}
       style={{ left: x, top: y, width }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

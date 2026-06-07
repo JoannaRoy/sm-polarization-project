@@ -1,12 +1,11 @@
-export type Polarity = "for" | "against";
+export type Polarity = "agree" | "disagree";
 
 export interface TopicSummary {
   id: string;
   label: string;
-  polarity_target: string;
-  cluster_count: number;
+  sub_topic_count: number;
   argument_count: number;
-  has_polarity_slates: boolean;
+  has_any_slates: boolean;
 }
 
 export interface Argument {
@@ -14,6 +13,7 @@ export interface Argument {
   text: string;
   post_id: string;
   topic_sentence: string | null;
+  polarity: Polarity | null;
 }
 
 export interface RepresentativeStatement {
@@ -24,17 +24,14 @@ export interface RepresentativeStatement {
   represented_count: number;
 }
 
-export interface Cluster {
+export interface SubTopicDetail {
   id: string;
-  polarity: Polarity;
+  label: string;
+  polarity_target: string | null;
   count: number;
   arguments: Argument[];
-  representative_statements: RepresentativeStatement[];
-}
-
-export interface PolaritySlate {
-  polarity: Polarity;
-  representative_statements: RepresentativeStatement[];
+  agree_slate: RepresentativeStatement[];
+  disagree_slate: RepresentativeStatement[];
 }
 
 export interface Claim {
@@ -42,6 +39,7 @@ export interface Claim {
   text: string;
   topic_sentence: string | null;
   polarity: Polarity | null;
+  sub_topic_id: string | null;
 }
 
 export interface TopicPost {
@@ -53,12 +51,11 @@ export interface TopicPost {
 export interface TopicDetail {
   id: string;
   label: string;
-  polarity_target: string;
   opinion_post_count: number;
   argument_count: number;
   posts: TopicPost[];
-  clusters: Cluster[];
-  polarity_slates: PolaritySlate[];
+  sub_topics: SubTopicDetail[];
+  total_sub_topic_count: number;
 }
 
 async function readError(res: Response): Promise<string> {
@@ -80,7 +77,6 @@ export const fetchTopic = (id: string) =>
 export interface TopicCandidate {
   id: string;
   label: string;
-  polarity_target: string;
   score: number;
 }
 

@@ -7,8 +7,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from db import connect
-from db.views import TopicDetail, TopicSummary, topic_detail, topic_summary
 from db.models import Topic
+from db.views import TopicDetail, TopicSummary, topic_detail, topic_summary
 from main import (
     DEFAULT_TOPIC_CANDIDATES,
     configure_logging,
@@ -24,7 +24,6 @@ app = FastAPI()
 class TopicCandidate(BaseModel):
     id: str
     label: str
-    polarity_target: str
     score: float
 
 

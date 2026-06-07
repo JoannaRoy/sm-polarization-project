@@ -39,40 +39,24 @@ TOPIC_FRAME_SCHEMA = {
     "type": "object",
     "properties": {
         "label": {"type": "string"},
-        "polarity_target": {"type": "string"},
     },
-    "required": ["label", "polarity_target"],
+    "required": ["label"],
     "additionalProperties": False,
 }
 
-TOPIC_FRAME_PROMPT = """You are naming a topic cluster from BERTopic keywords and defining the polarity frame for argument extraction.
-
-Generate a concise, human-readable topic name.
-Define a polarity target: a concrete claim that "for" supports and "against" opposes.
+TOPIC_FRAME_PROMPT = """You are naming a topic cluster from BERTopic keywords.
 
 Rules:
 - Use 2-5 words for the label.
-- Use Title Case for the label.
+- Use Title Case.
 - Do not include topic numbers, post numbers, underscores, hashtags, or quoted text.
 - Name the subject, not a stance toward it.
-- Make the polarity target a complete, specific claim.
-- Do not use the words "for arguments" or "against arguments" in the polarity target.
-- For comparison topics, pick one side as the target, e.g. "cats are preferable to dogs".
 
 Examples:
-- BERTopic label: electric_vehicle_pricing_strategy
-- Response: {{"label": "Electric Vehicle Pricing", "polarity_target": "electric vehicles should be made more affordable"}}
+- BERTopic label: electric_vehicle_pricing_strategy -> {{"label": "Electric Vehicle Pricing"}}
+- BERTopic label: cats_dogs_pet_choice -> {{"label": "Cats vs Dogs"}}
 
-- BERTopic label: cats_dogs_pet_choice
-- Response: {{"label": "Cats vs Dogs", "polarity_target": "cats are preferable to dogs"}}
-
-Return only a JSON object with label and polarity_target."""
-
-INVALID_POLARITY_TARGETS = {
-    "specific claim",
-    "the claim that for arguments support",
-    "the claim that for supports",
-}
+Return only a JSON object with the label field."""
 
 
 def build_model():
@@ -237,18 +221,6 @@ def generate_topic_frame(bertopic_label):
         ],
         schema=TOPIC_FRAME_SCHEMA,
     )
-    polarity_target = frame[Field.POLARITY_TARGET].strip()
-    normalized_target = polarity_target.lower()
-    if (
-        normalized_target in INVALID_POLARITY_TARGETS
-        or "for arguments" in normalized_target
-        or "against arguments" in normalized_target
-    ):
-        raise ValueError(
-            f"LLM returned a placeholder polarity target for topic {bertopic_label}: "
-            f"{polarity_target}"
-        )
-    frame[Field.POLARITY_TARGET] = polarity_target
     frame[Field.LABEL] = frame[Field.LABEL].strip()
     return frame
 
@@ -260,14 +232,11 @@ def generate_topic_frames(model, topics):
     frames = {}
     for topic_id in sorted(set(topics)):
         if topic_id == OUTLIER_TOPIC:
-            frames[topic_id] = {
-                Field.LABEL: "Outlier",
-                Field.POLARITY_TARGET: "the outlier topic",
-            }
+            frames[topic_id] = {Field.LABEL: "Outlier"}
             continue
 
         bertopic_label = bertopic_labels.get(topic_id, f"Topic {topic_id}")
-        logger.info("Generating frame for topic %s from %s", topic_id, bertopic_label)
+        logger.info("Generating label for topic %s from %s", topic_id, bertopic_label)
         frames[topic_id] = generate_topic_frame(bertopic_label)
     return frames
 
@@ -282,7 +251,6 @@ def _build_clusters(topics, claim_ids, frames=None, centroids=None):
             label = frame.get(Field.LABEL, f"Topic {topic_id}")
             clusters[topic_id] = {
                 Field.LABEL: label,
-                Field.POLARITY_TARGET: frame.get(Field.POLARITY_TARGET, label),
                 Field.CLAIM_IDS: [],
             }
             if topic_id in centroids:

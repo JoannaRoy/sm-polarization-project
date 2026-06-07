@@ -6,10 +6,17 @@ import logging
 
 from config import LOG_LEVEL
 from db import Field, Polarity, connect
-from db.reads import get_polarity_slate, get_topic
-from pipeline import argument_graph, claim_extraction, statement_generation, topic_clustering
-from pipeline.utils.post_parsing import post_to_pipeline_post
+from db.reads import get_polarity_slate, get_sub_topics_for_topic, get_topic
+from db.views import MAX_SUB_TOPICS_PER_TOPIC
+from pipeline import (
+    claim_extraction,
+    polarity_assignment,
+    statement_generation,
+    sub_topic_discovery,
+    topic_clustering,
+)
 from pipeline.topic_clustering import OUTLIER_TOPIC, top_topics_by_centroid
+from pipeline.utils.post_parsing import post_to_pipeline_post
 
 DEFAULT_TOPIC_CANDIDATES = 5
 
@@ -23,24 +30,23 @@ PIPELINE_STAGES = (
         claim_extraction.run_batch,
     ),
     ("topic-clustering", "Stage 2/5: topic clustering", topic_clustering.run_batch),
-    ("argument-graph", "Stage 3/5: argument graph", argument_graph.run_batch),
     (
-        "cluster-slate-generation",
-        "Stage 4/5: cluster slate generation",
-        statement_generation.run_cluster_batch,
+        "sub-topic-discovery",
+        "Stage 3/5: sub-topic discovery",
+        sub_topic_discovery.run_batch,
     ),
     (
-        "polarity-slate-generation",
-        "Stage 5/5: polarity slate generation",
-        statement_generation.run_polarity_batch,
+        "polarity-assignment",
+        "Stage 4/5: polarity assignment",
+        polarity_assignment.run_batch,
+    ),
+    (
+        "slate-generation",
+        "Stage 5/5: slate generation",
+        statement_generation.run_batch,
     ),
 )
-RECLUSTERING_STAGE = (
-    "argument-reclustering",
-    "Stage 3b/5: argument reclustering",
-    argument_graph.run_recluster,
-)
-STAGE_NAMES = tuple(name for name, _, _ in (*PIPELINE_STAGES, RECLUSTERING_STAGE))
+STAGE_NAMES = tuple(name for name, _, _ in PIPELINE_STAGES)
 
 
 def configure_logging():
@@ -52,26 +58,16 @@ def configure_logging():
 
 def selected_stages(only=None, start_at=None, skip=None):
     stage_lookup = {
-        name: (label, run_stage)
-        for name, label, run_stage in (*PIPELINE_STAGES, RECLUSTERING_STAGE)
+        name: (label, run_stage) for name, label, run_stage in PIPELINE_STAGES
     }
     stages = PIPELINE_STAGES
     if only is not None:
         label, run_stage = stage_lookup[only]
         stages = ((only, label, run_stage),)
     if start_at is not None:
-        if start_at == RECLUSTERING_STAGE[0]:
-            statement_stages = tuple(
-                stage
-                for stage in PIPELINE_STAGES
-                if stage[0]
-                in ("cluster-slate-generation", "polarity-slate-generation")
-            )
-            stages = (RECLUSTERING_STAGE, *statement_stages)
-        else:
-            pipeline_stage_names = tuple(name for name, _, _ in PIPELINE_STAGES)
-            start_index = pipeline_stage_names.index(start_at)
-            stages = PIPELINE_STAGES[start_index:]
+        pipeline_stage_names = tuple(name for name, _, _ in PIPELINE_STAGES)
+        start_index = pipeline_stage_names.index(start_at)
+        stages = PIPELINE_STAGES[start_index:]
     if skip:
         skipped = set(skip)
         stages = [stage for stage in stages if stage[0] not in skipped]
@@ -81,12 +77,10 @@ def selected_stages(only=None, start_at=None, skip=None):
 def run_batch(only=None, start_at=None, skip=None, data_path=None, resume=False):
     """Preprocessing run: process all test data through every stage.
 
-    ``data_path`` (optional) overrides the default fixture path; it is only
-    consumed by ``claim-extraction``, which is the one stage that reads the
-    source JSON. Downstream stages operate on rows already in the DB.
+    ``data_path`` (optional) overrides the default fixture path; only
+    consumed by ``claim-extraction`` (the one stage that reads source JSON).
 
-    ``resume`` (optional) is forwarded only to ``claim-extraction`` so a
-    crashed batch can pick up from the last completed post.
+    ``resume`` (optional) is forwarded only to ``claim-extraction``.
     """
     stages = selected_stages(only=only, start_at=start_at, skip=skip)
     if not stages:
@@ -110,35 +104,36 @@ def _format_slate(statements):
     return "\n".join(f"- {statement}" for statement in statements)
 
 
-def format_topic_response(topic, polarity_slates):
-    """Pure-template response: pair the matched topic with whichever
-    precomputed FOR/AGAINST polarity slates exist for it. Each side renders
-    as a bulleted list of slate statements so the proportional structure
-    from GEN/DISC is preserved instead of collapsed into a single sentence."""
+def format_topic_response(topic, sub_topic_views):
+    """Pure-template response: walk every sub-topic of the matched topic and
+    render its agree/disagree slates as nested bulleted lists. Descriptive
+    sub-topics are skipped."""
     sections = [f"Your post is about {topic.label}."]
-    for_slate = polarity_slates.get(Polarity.FOR) or []
-    against_slate = polarity_slates.get(Polarity.AGAINST) or []
-    if for_slate:
+    rendered_any = False
+    for sub_topic, agree_slate, disagree_slate in sub_topic_views:
+        if sub_topic.polarity_target is None:
+            continue
+        if not agree_slate and not disagree_slate:
+            continue
+        rendered_any = True
         sections.append(
-            f'Representative arguments in favor of "{topic.polarity_target}":\n'
-            f"{_format_slate(for_slate)}"
+            f'Sub-topic: {sub_topic.label} -- "{sub_topic.polarity_target}"'
         )
-    if against_slate:
+        if agree_slate:
+            sections.append(f"Agree:\n{_format_slate(agree_slate)}")
+        if disagree_slate:
+            sections.append(f"Disagree:\n{_format_slate(disagree_slate)}")
+    if not rendered_any:
         sections.append(
-            "Representative arguments against:\n"
-            f"{_format_slate(against_slate)}"
-        )
-    if not for_slate and not against_slate:
-        sections.append(
-            "We do not yet have slates for the arguments on either side of this topic."
+            "We do not yet have slates for any sub-topic under this topic."
         )
     return "\n\n".join(sections)
 
 
 def match_post_topics(post, k=DEFAULT_TOPIC_CANDIDATES):
     """Real-time: rank the top ``k`` candidate topics for the post by centroid
-    similarity. Returns a list of {id, label, polarity_target, score} dicts so
-    the caller (UI) can ask the user which one fits best."""
+    similarity. Returns a list of {id, label, score} dicts so the caller (UI)
+    can ask the user which one fits best."""
     logger.info("Matching single post against top %d topics", k)
     pipeline_post = post_to_pipeline_post(post)
     text = pipeline_post[Field.TEXT]
@@ -156,7 +151,6 @@ def match_post_topics(post, k=DEFAULT_TOPIC_CANDIDATES):
             {
                 "id": topic.id,
                 "label": topic.label,
-                "polarity_target": topic.polarity_target,
                 "score": score,
             }
         )
@@ -173,18 +167,27 @@ def match_post_topics(post, k=DEFAULT_TOPIC_CANDIDATES):
 
 
 def topic_response(topic_id):
-    """Return the templated FOR/AGAINST paragraph for a chosen topic."""
+    """Return the templated paragraph for a chosen topic, walking every sub-topic."""
     conn = connect()
     topic = get_topic(conn, topic_id)
     if topic is None:
         conn.close()
         raise ValueError(f"Topic {topic_id} not found")
-    polarity_slates = {
-        polarity: get_polarity_slate(conn, topic_id, polarity)
-        for polarity in Polarity
-    }
+    sub_topics = get_sub_topics_for_topic(conn, topic_id)
+    sub_topics = sorted(
+        sub_topics,
+        key=lambda s: (s.polarity_target is None, -s.count, s.id),
+    )[:MAX_SUB_TOPICS_PER_TOPIC]
+    sub_topic_views = [
+        (
+            sub_topic,
+            get_polarity_slate(conn, sub_topic.id, Polarity.AGREE),
+            get_polarity_slate(conn, sub_topic.id, Polarity.DISAGREE),
+        )
+        for sub_topic in sub_topics
+    ]
     conn.close()
-    return format_topic_response(topic, polarity_slates)
+    return format_topic_response(topic, sub_topic_views)
 
 
 def process_post(post):
@@ -206,12 +209,12 @@ def parse_args():
     batch_parser.add_argument("--skip", choices=STAGE_NAMES, nargs="*", default=[])
     batch_parser.add_argument(
         "--data-path",
-        help="Override the source JSON fixture for claim-extraction (e.g. test_data/mastodon_real.json).",
+        help="Override the source JSON fixture for claim-extraction.",
     )
     batch_parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip claim-extraction posts already marked done; pick up where a prior crashed run left off.",
+        help="Skip claim-extraction posts already marked done.",
     )
 
     stage_parser = subparsers.add_parser("stage", help="Run one batch pipeline stage")

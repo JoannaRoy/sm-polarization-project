@@ -39,18 +39,20 @@ UMAP_RANDOM_STATE = 42
 HDBSCAN_MIN_CLUSTER_SIZE = 10
 HDBSCAN_MIN_SAMPLES = 3
 
-# --- Argument Graph (2-argument-graph/) ---
-# UMAP + HDBSCAN per (topic, polarity) bucket. Buckets are smaller than the
-# full topic-clustering corpus, so neighbors and cluster size are smaller too.
-ARGUMENT_UMAP_N_NEIGHBORS = 5
-ARGUMENT_UMAP_N_COMPONENTS = 5
-ARGUMENT_UMAP_MIN_DIST = 0.0
-ARGUMENT_UMAP_METRIC = "cosine"
-ARGUMENT_UMAP_RANDOM_STATE = 42
-ARGUMENT_HDBSCAN_MIN_CLUSTER_SIZE = 3
-ARGUMENT_HDBSCAN_MIN_SAMPLES = 1
+# --- Sub-topic discovery ---
+# UMAP + HDBSCAN over the claims of one topic, used to find within-topic axes
+# of disagreement. Topic-internal claim counts are smaller than the full
+# topic-clustering corpus, so neighbors and cluster size are smaller too.
+SUBTOPIC_UMAP_N_NEIGHBORS = 5
+SUBTOPIC_UMAP_N_COMPONENTS = 5
+SUBTOPIC_UMAP_MIN_DIST = 0.0
+SUBTOPIC_UMAP_METRIC = "cosine"
+SUBTOPIC_UMAP_RANDOM_STATE = 42
+SUBTOPIC_HDBSCAN_MIN_CLUSTER_SIZE = 3
+SUBTOPIC_HDBSCAN_MIN_SAMPLES = 1
+# How many central claims to feed the LLM when naming + framing a sub-cluster.
+SUBTOPIC_LLM_SAMPLE_SIZE = 20
 
-# --- Statement Generation (3-statement-generation/) ---
-GSC_CLUSTER_SLATE_SIZE = 3
-GSC_POLARITY_SLATE_SIZE = 3
+# --- Statement Generation ---
+GSC_SLATE_SIZE = 3
 GSC_GEN_QUERY_ITEMS = 5

@@ -1,0 +1,34 @@
+---
+description: Always ask before running anything that hits the LLM provider
+alwaysApply: true
+---
+
+# Do NOT run paid LLM commands without explicit approval
+
+This project's pipeline calls a hosted LLM (Together AI via `LLM_PROVIDER=openai`
+in `.env`). Each batch run can cost real money. Stop and confirm with the user
+before kicking off ANY of the following, even "just to test":
+
+- `python main.py` (full batch)
+- `python main.py batch ...`
+- `python main.py stage <name>` for any stage other than `topic-clustering`
+  (the only stage that does no LLM calls)
+- `python main.py process ...`
+- Any `docker compose exec pipeline python main.py ...` variant
+- Any `curl` or HTTP request to `/match-post-topics`, `/topic-response/...`,
+  or `/process` on the running API container
+
+Read-only smoke checks that do NOT call the LLM are fine without asking:
+
+- `python -c "import main; ..."` import checks
+- SQLite reads against `data/pipeline.db`
+- `curl http://localhost:8000/health`, `/topics`, `/topics/{id}` (these are DB reads)
+- `docker compose build`, `docker compose ps`, `docker compose logs`
+
+If a task seems to require running the pipeline (e.g. "verify the changes
+end-to-end"), describe the run you would do and ask first. Do not background
+it, do not run it "briefly to see if it works."
+
+The cost-per-batch on the current fixture (`test_data/mastodon_real.json`,
+~1500 posts) is on the order of single-digit cents per full run, but small
+costs accumulate and the user wants to be the one who decides when to spend.

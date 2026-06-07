@@ -1,10 +1,10 @@
 :root {
   color-scheme: light;
-  --against: #c2410c;
-  --against-soft: #ffedd5;
+  --disagree: #c2410c;
+  --disagree-soft: #ffedd5;
   --border: #d8dee9;
-  --for: #2563eb;
-  --for-soft: #dbeafe;
+  --agree: #2563eb;
+  --agree-soft: #dbeafe;
   --ink: #172033;
   --muted: #667085;
   --paper: #f6f7fb;
@@ -129,14 +129,14 @@ textarea {
   text-transform: uppercase;
 }
 
-.badge.for {
-  background: var(--for-soft);
-  color: var(--for);
+.badge.agree {
+  background: var(--agree-soft);
+  color: var(--agree);
 }
 
-.badge.against {
-  background: var(--against-soft);
-  color: var(--against);
+.badge.disagree {
+  background: var(--disagree-soft);
+  color: var(--disagree);
 }
 
 .badge.ready {
@@ -236,6 +236,172 @@ textarea {
   padding: 8px 12px;
 }
 
+.response-body {
+  margin-top: 12px;
+  display: grid;
+  gap: 14px;
+}
+
+.response-intro {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.response-trailing {
+  margin: 0;
+  font-size: 14px;
+}
+
+.subtopic-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.subtopic-item {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.subtopic-item:hover {
+  border-color: #94a3b8;
+}
+
+.subtopic-item:has(> details[open]) {
+  border-color: var(--ink);
+  box-shadow: 0 6px 18px rgba(23, 32, 51, 0.06);
+}
+
+.subtopic-item > details > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+}
+
+.subtopic-item > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subtopic-item > details > summary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+  border-radius: 14px;
+}
+
+.subtopic-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: var(--ink);
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.subtopic-item > details[open] > summary .subtopic-chevron {
+  transform: rotate(90deg);
+  background: var(--ink);
+  color: white;
+}
+
+.subtopic-summary-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subtopic-label {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.subtopic-target {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  font-style: italic;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subtopic-counts {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.subtopic-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-top: 1px dashed var(--border);
+  min-width: 0;
+}
+
+.slate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.slate-header {
+  align-self: flex-start;
+}
+
+.slate-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slate-list li {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  line-height: 1.45;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.slate-agree .slate-list li {
+  border-color: #cdd9f7;
+  background: #f3f6ff;
+}
+
+.slate-disagree .slate-list li {
+  border-color: #fcd7c0;
+  background: #fff5ec;
+}
+
 .graph-header {
   display: flex;
   align-items: flex-start;
@@ -289,15 +455,15 @@ textarea {
   display: inline-block;
 }
 
-.legend-dot.polarity.for {
-  background: var(--for);
+.legend-dot.polarity.agree {
+  background: var(--agree);
 }
 
-.legend-dot.polarity.against {
-  background: var(--against);
+.legend-dot.polarity.disagree {
+  background: var(--disagree);
 }
 
-.legend-dot.cluster {
+.legend-dot.subtopic {
   background: #475569;
 }
 
@@ -381,13 +547,13 @@ textarea {
   opacity: 0.9;
 }
 
-.graph-edge.for {
-  stroke: var(--for);
+.graph-edge.agree {
+  stroke: var(--agree);
   stroke-opacity: 0.6;
 }
 
-.graph-edge.against {
-  stroke: var(--against);
+.graph-edge.disagree {
+  stroke: var(--disagree);
   stroke-opacity: 0.6;
 }
 
@@ -412,8 +578,8 @@ textarea {
 
 .graph-node.root { min-height: 60px; }
 .graph-node.topic { min-height: 60px; }
-.graph-node.polarity { min-height: 140px; }
-.graph-node.cluster { min-height: 160px; }
+.graph-node.subtopic { min-height: 140px; }
+.graph-node.polarity { min-height: 160px; }
 .graph-node.argument { min-height: 80px; }
 
 .graph-node:hover {
@@ -448,14 +614,26 @@ textarea {
   border-left: 4px solid #111827;
 }
 
-.graph-node.polarity.for,
-.graph-node.cluster.for {
-  border-left: 4px solid var(--for);
+.graph-node.subtopic {
+  border-left: 4px solid #475569;
 }
 
-.graph-node.polarity.against,
-.graph-node.cluster.against {
-  border-left: 4px solid var(--against);
+.graph-node.subtopic.descriptive {
+  border-left-color: #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.graph-node.subtopic.descriptive .graph-node-label {
+  color: #475569;
+}
+
+.graph-node.polarity.agree {
+  border-left: 4px solid var(--agree);
+}
+
+.graph-node.polarity.disagree {
+  border-left: 4px solid var(--disagree);
 }
 
 .graph-node.argument {

@@ -91,9 +91,9 @@ export function Graph() {
   }
 
   const totalArguments = topics.reduce((sum, t) => sum + t.argument_count, 0);
-  const totalClusters = topics.reduce((sum, t) => sum + t.cluster_count, 0);
+  const totalSubTopics = topics.reduce((sum, t) => sum + t.sub_topic_count, 0);
   const readyTopics = topics.filter(
-    (t) => t.cluster_count > 0 && t.has_polarity_slates,
+    (t) => t.sub_topic_count > 0 && t.has_any_slates,
   ).length;
 
   return (
@@ -125,8 +125,8 @@ export function Graph() {
             <span>topics ready</span>
           </div>
           <div className="stat">
-            <strong>{totalClusters}</strong>
-            <span>clusters</span>
+            <strong>{totalSubTopics}</strong>
+            <span>sub-topics</span>
           </div>
           <div className="stat">
             <strong>{totalArguments}</strong>
@@ -138,13 +138,13 @@ export function Graph() {
             <span className="legend-dot topic" /> topic
           </span>
           <span className="legend-item">
-            <span className="legend-dot polarity for" /> for
+            <span className="legend-dot subtopic" /> sub-topic
           </span>
           <span className="legend-item">
-            <span className="legend-dot polarity against" /> against
+            <span className="legend-dot polarity agree" /> agree
           </span>
           <span className="legend-item">
-            <span className="legend-dot cluster" /> cluster
+            <span className="legend-dot polarity disagree" /> disagree
           </span>
           <span className="legend-item">
             <span className="legend-dot argument" /> argument

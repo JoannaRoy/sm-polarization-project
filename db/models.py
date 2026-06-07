@@ -16,16 +16,16 @@ class Field(StrEnum):
     TEXT = "text"
     LABEL = "label"
     POLARITY_TARGET = "polarity_target"
-    LAYER = "layer"
     SCOPE_ID = "scope_id"
     POLARITY = "polarity"
     TOPIC_ID = "topic_id"
     TOPIC_LABEL = "topic_label"
     TOPIC_SENTENCE = "topic_sentence"
+    SUB_TOPIC_ID = "sub_topic_id"
+    SUB_TOPICS = "sub_topics"
     POST_TOPIC = "post_topic"
     CLAIMS = "claims"
     CLAIM_IDS = "claim_ids"
-    CLUSTER_ID = "cluster_id"
     POST_ID = "post_id"
     POST_IDS = "post_ids"
     CENTROID = "centroid"
@@ -40,24 +40,13 @@ class Field(StrEnum):
 
 
 class Polarity(StrEnum):
-    FOR = "for"
-    AGAINST = "against"
-
-
-class StatementLayer(StrEnum):
-    ARGUMENT_CLUSTER = "argument_cluster"
-    POLARITY = "polarity"
+    AGREE = "agree"
+    DISAGREE = "disagree"
 
 
 PolarityType = Enum(
     Polarity,
     name="polarity",
-    values_callable=lambda e: [m.value for m in e],
-)
-
-StatementLayerType = Enum(
-    StatementLayer,
-    name="statement_layer",
     values_callable=lambda e: [m.value for m in e],
 )
 
@@ -67,15 +56,11 @@ class Topic(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     label: Mapped[str] = mapped_column(Text, nullable=False)
-    polarity_target: Mapped[str] = mapped_column(Text, nullable=False)
     centroid: Mapped[bytes | None] = mapped_column(LargeBinary)
 
     posts: Mapped[list["Post"]] = relationship(back_populates="topic")
     arguments: Mapped[list["ArgumentInstance"]] = relationship(back_populates="topic")
-    clusters: Mapped[list["ArgumentCluster"]] = relationship(back_populates="topic")
-    representative_statements: Mapped[list["RepresentativeStatement"]] = relationship(
-        back_populates="topic"
-    )
+    sub_topics: Mapped[list["SubTopic"]] = relationship(back_populates="topic")
 
 
 class Post(Base):
@@ -91,6 +76,32 @@ class Post(Base):
     arguments: Mapped[list["ArgumentInstance"]] = relationship(back_populates="post")
 
 
+class SubTopic(Base):
+    """A within-topic axis of disagreement discovered by sub-clustering.
+
+    ``polarity_target`` is NULL for descriptive sub-topics (no real debate
+    axis). Descriptive sub-topics skip polarity assignment and slate
+    generation; their claims keep ``polarity=NULL``.
+    """
+
+    __tablename__ = "sub_topics"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    polarity_target: Mapped[str | None] = mapped_column(Text)
+    centroid: Mapped[bytes | None] = mapped_column(LargeBinary)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+    topic: Mapped["Topic"] = relationship(back_populates="sub_topics")
+    instances: Mapped[list["ArgumentInstance"]] = relationship(
+        back_populates="sub_topic"
+    )
+    representative_statements: Mapped[list["RepresentativeStatement"]] = relationship(
+        back_populates="sub_topic"
+    )
+
+
 class ArgumentInstance(Base):
     __tablename__ = "argument_instances"
 
@@ -98,41 +109,30 @@ class ArgumentInstance(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     topic_sentence: Mapped[str | None] = mapped_column(Text)
     polarity: Mapped[Polarity | None] = mapped_column(PolarityType)
-    cluster_id: Mapped[str | None] = mapped_column(ForeignKey("argument_clusters.id"))
+    sub_topic_id: Mapped[str | None] = mapped_column(ForeignKey("sub_topics.id"))
     post_id: Mapped[str] = mapped_column(ForeignKey("posts.id"), nullable=False)
     topic_id: Mapped[str | None] = mapped_column(ForeignKey("topics.id"))
 
     topic: Mapped["Topic | None"] = relationship(back_populates="arguments")
     post: Mapped["Post"] = relationship(back_populates="arguments")
-    cluster: Mapped["ArgumentCluster | None"] = relationship(back_populates="instances")
-
-
-class ArgumentCluster(Base):
-    __tablename__ = "argument_clusters"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    polarity: Mapped[Polarity] = mapped_column(PolarityType, nullable=False)
-    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), nullable=False)
-    count: Mapped[int] = mapped_column(Integer, default=0)
-    centroid: Mapped[bytes | None] = mapped_column(LargeBinary)
-
-    topic: Mapped["Topic"] = relationship(back_populates="clusters")
-    instances: Mapped[list["ArgumentInstance"]] = relationship(back_populates="cluster")
+    sub_topic: Mapped["SubTopic | None"] = relationship(back_populates="instances")
 
 
 class RepresentativeStatement(Base):
-    """One generated GEN/DISC slate statement for a topic-scoped layer."""
+    """One generated GEN/DISC slate statement for a (sub_topic, polarity) bucket."""
 
     __tablename__ = "representative_statements"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    layer: Mapped[StatementLayer] = mapped_column(StatementLayerType, nullable=False)
-    scope_id: Mapped[str] = mapped_column(String, nullable=False)
-    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id"), nullable=False)
-    polarity: Mapped[Polarity | None] = mapped_column(PolarityType)
+    sub_topic_id: Mapped[str] = mapped_column(
+        ForeignKey("sub_topics.id"), nullable=False
+    )
+    polarity: Mapped[Polarity] = mapped_column(PolarityType, nullable=False)
     round_index: Mapped[int] = mapped_column(Integer, nullable=False)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     represented_ids: Mapped[str] = mapped_column(Text, nullable=False)
     represented_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    topic: Mapped["Topic"] = relationship(back_populates="representative_statements")
+    sub_topic: Mapped["SubTopic"] = relationship(
+        back_populates="representative_statements"
+    )

@@ -8,11 +8,11 @@ import numpy as np
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from db.models import (
-    ArgumentCluster,
     ArgumentInstance,
     Field,
     Post,
     RepresentativeStatement,
+    SubTopic,
     Topic,
 )
 
@@ -50,7 +50,6 @@ def mark_post_claims_extracted(conn, post_id):
 
 
 def clear_claim_extraction_markers(conn):
-    """Clear the claims_extracted_at marker for every post."""
     conn.query(Post).update(
         {Post.claims_extracted_at: None},
         synchronize_session=False,
@@ -65,7 +64,6 @@ def write_topic_assignments_for_claims(conn, clusters):
             continue
         tid = str(topic_id)
         label = info[Field.LABEL]
-        polarity_target = info[Field.POLARITY_TARGET]
         centroid = info.get(Field.CENTROID)
         centroid_bytes = (
             np.asarray(centroid, dtype=np.float32).tobytes()
@@ -74,17 +72,9 @@ def write_topic_assignments_for_claims(conn, clusters):
         )
         topic = conn.get(Topic, tid)
         if topic is None:
-            conn.add(
-                Topic(
-                    id=tid,
-                    label=label,
-                    polarity_target=polarity_target,
-                    centroid=centroid_bytes,
-                )
-            )
+            conn.add(Topic(id=tid, label=label, centroid=centroid_bytes))
         else:
             topic.label = label
-            topic.polarity_target = polarity_target
             topic.centroid = centroid_bytes
         for claim_id in info[Field.CLAIM_IDS]:
             instance = conn.get(ArgumentInstance, claim_id)
@@ -114,16 +104,13 @@ def refresh_post_primary_topics(conn):
 
 
 def reset_topic_dependent_state(conn):
-    """Drop topics, clusters, and statements; clear topic ids on existing claims."""
-    for model in (
-        RepresentativeStatement,
-        ArgumentCluster,
-    ):
+    """Drop topics, sub-topics, statements; clear topic/sub-topic/polarity on claims."""
+    for model in (RepresentativeStatement, SubTopic):
         conn.query(model).delete(synchronize_session=False)
     conn.query(ArgumentInstance).update(
         {
             ArgumentInstance.topic_id: None,
-            ArgumentInstance.cluster_id: None,
+            ArgumentInstance.sub_topic_id: None,
             ArgumentInstance.polarity: None,
         },
         synchronize_session=False,
@@ -139,35 +126,26 @@ def reset_topic_dependent_state(conn):
 # --- Argument instances ---
 
 
-def reset_argument_graph_state(conn, topic_ids):
-    """Drop clusters and statements for these topics; reset claim cluster_id and polarity."""
+def reset_sub_topic_state(conn, topic_ids):
+    """Drop sub-topics and statements for these topics; reset claim sub_topic_id and polarity."""
     if not topic_ids:
         return
 
     conn.query(ArgumentInstance).filter(ArgumentInstance.topic_id.in_(topic_ids)).update(
-        {ArgumentInstance.cluster_id: None, ArgumentInstance.polarity: None},
+        {ArgumentInstance.sub_topic_id: None, ArgumentInstance.polarity: None},
         synchronize_session=False,
     )
-    for model in (RepresentativeStatement, ArgumentCluster):
-        conn.query(model).filter(model.topic_id.in_(topic_ids)).delete(
-            synchronize_session=False
-        )
-    conn.commit()
-
-
-def clear_argument_clusters(conn, topic_ids):
-    """Remove cluster-dependent data while preserving extracted arguments."""
-    if not topic_ids:
-        return
-
-    conn.query(ArgumentInstance).filter(ArgumentInstance.topic_id.in_(topic_ids)).update(
-        {ArgumentInstance.cluster_id: None},
-        synchronize_session=False,
+    sub_topic_ids = [
+        st.id
+        for st in conn.query(SubTopic).filter(SubTopic.topic_id.in_(topic_ids)).all()
+    ]
+    if sub_topic_ids:
+        conn.query(RepresentativeStatement).filter(
+            RepresentativeStatement.sub_topic_id.in_(sub_topic_ids)
+        ).delete(synchronize_session=False)
+    conn.query(SubTopic).filter(SubTopic.topic_id.in_(topic_ids)).delete(
+        synchronize_session=False
     )
-    for model in (RepresentativeStatement, ArgumentCluster):
-        conn.query(model).filter(model.topic_id.in_(topic_ids)).delete(
-            synchronize_session=False
-        )
     conn.commit()
 
 
@@ -190,7 +168,7 @@ def clear_claim_extractions(conn):
     for model in (
         RepresentativeStatement,
         ArgumentInstance,
-        ArgumentCluster,
+        SubTopic,
         Topic,
     ):
         conn.query(model).delete(synchronize_session=False)
@@ -208,47 +186,52 @@ def set_claim_polarity(conn, instance_id, polarity):
         conn.commit()
 
 
-def assign_instance_to_cluster(conn, instance_id, cluster_id):
+def assign_instance_to_sub_topic(conn, instance_id, sub_topic_id):
     instance = conn.get(ArgumentInstance, instance_id)
     if instance is not None:
-        instance.cluster_id = cluster_id
+        instance.sub_topic_id = sub_topic_id
 
 
-# --- Argument clusters ---
+# --- Sub-topics ---
 
 
-def create_argument_cluster(conn, cluster_id, polarity, topic_id):
+def create_sub_topic(conn, sub_topic_id, topic_id, label, polarity_target):
+    """Create a SubTopic row. ``polarity_target=None`` marks it descriptive."""
     conn.add(
-        ArgumentCluster(id=cluster_id, polarity=polarity, topic_id=topic_id, count=1)
+        SubTopic(
+            id=sub_topic_id,
+            topic_id=topic_id,
+            label=label,
+            polarity_target=polarity_target,
+            count=0,
+        )
     )
     conn.flush()
 
 
-def update_cluster_centroids(conn, centroids):
-    """Persist centroid arrays + counts back to the DB."""
-    for cid, cdata in centroids.items():
-        cluster = conn.get(ArgumentCluster, cid)
-        if cluster is not None:
-            cluster.centroid = np.asarray(
+def update_sub_topic_centroids(conn, centroids):
+    """Persist centroid arrays + counts for sub-topics."""
+    for sid, cdata in centroids.items():
+        sub_topic = conn.get(SubTopic, sid)
+        if sub_topic is not None:
+            sub_topic.centroid = np.asarray(
                 cdata[Field.CENTROID], dtype=np.float32
             ).tobytes()
-            cluster.count = cdata[Field.COUNT]
+            sub_topic.count = cdata[Field.COUNT]
     conn.commit()
 
 
-def replace_representative_statements(conn, layer, scope_id, topic_id, polarity, rows):
+def replace_representative_statements(conn, sub_topic_id, polarity, rows):
     conn.query(RepresentativeStatement).filter(
-        RepresentativeStatement.layer == layer,
-        RepresentativeStatement.scope_id == scope_id,
+        RepresentativeStatement.sub_topic_id == sub_topic_id,
+        RepresentativeStatement.polarity == polarity,
     ).delete()
     for row in rows:
         represented_ids = row[Field.REPRESENTED_IDS]
         conn.add(
             RepresentativeStatement(
                 id=f"rs_{uuid.uuid4().hex[:12]}",
-                layer=layer,
-                scope_id=scope_id,
-                topic_id=topic_id,
+                sub_topic_id=sub_topic_id,
                 polarity=polarity,
                 round_index=row[Field.ROUND_INDEX],
                 statement=row[Field.STATEMENT],
