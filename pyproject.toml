@@ -1,0 +1,30 @@
+[project]
+name = "sm-polarization-project"
+version = "0.3.0"
+description = "Surfaces diverse perspectives on social media posts"
+requires-python = ">=3.13"
+dependencies = [
+    "bertopic",
+    "fastapi>=0.136.3",
+    "hdbscan",
+    "numpy>=2.4.4",
+    "pandas",
+    "requests>=2.33.0",
+    "scikit-learn",
+    "sentence-transformers>=5.3.0",
+    "sqlalchemy>=2.0",
+    "torch",
+    "umap-learn",
+    "uvicorn>=0.48.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

@@ -1,0 +1,69 @@
+services:
+  llm:
+    profiles: ["local"]
+    build:
+      context: .
+      dockerfile: infra/llm.Dockerfile
+      args:
+        LLAMAFILE_VERSION: 0.10.0
+        MODEL_FILE: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+        MODEL_URL: https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+      secrets:
+        - hf_token
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: infra/pipeline.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      llm:
+        condition: service_healthy
+        required: false
+    environment:
+      OMP_NUM_THREADS: "10"
+      OPENBLAS_NUM_THREADS: "10"
+      MKL_NUM_THREADS: "10"
+      NUMEXPR_NUM_THREADS: "10"
+      TOKENIZERS_PARALLELISM: "false"
+      LLM_PROVIDER: "${LLM_PROVIDER:-llamafile}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-http://llm:8080/v1}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_CONCURRENCY: "${LLM_CONCURRENCY:-1}"
+    cpus: 10.0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./data/hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

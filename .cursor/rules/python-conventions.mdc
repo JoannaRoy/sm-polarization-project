@@ -1,0 +1,48 @@
+---
+description: Python coding conventions for this project
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Conventions
+
+## StrEnum for all string identifiers
+
+Use `StrEnum` classes (defined in `schema.py`) for node types, edge types, and field/property names. Never use raw string literals for these values.
+
+```python
+# Bad
+G.add_node(nid, type="post", text="hello")
+
+# Good
+from schema import NodeType, Field
+G.add_node(nid, **{Field.TYPE: NodeType.POST, Field.TEXT: "hello"})
+```
+
+## Shared config file at project root
+
+All configurable constants (paths, URLs, model names, thresholds) live in `config.py` at the project root. Import from there; do not hardcode values in individual modules.
+
+```python
+# Bad
+LLM_BASE_URL = "http://localhost:8080/v1"
+
+# Good
+from config import LLM_BASE_URL
+```
+
+## Imports always at the top of the file
+
+All imports go at module level. Never use inline imports inside functions or methods.
+
+## No sys.path hacking
+
+Do not use `sys.path.insert` or `sys.path.append` to fix import resolution. The project uses `pythonpath` in `pyproject.toml` (`[tool.pytest.ini_options]`) to make the root and component directories importable. Run scripts from the project root.
+
+## No underscore-prefixed class names
+
+Never name a class with a leading underscore. Use a clear, descriptive name instead. If the class is internal to a module, that's already communicated by not exporting it.
+
+## No unnecessary try/except
+
+Avoid wrapping code in try/except blocks unless there is a specific, justified reason to catch and handle that exception.

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Generated outputs
+output/
+data/
+test_data/
+
+# Large binaries (download separately)
+infra/llamafile-0.10.0
+
+# Local secrets
+.env
+
+# Personal
+pseudocode.md
+todos.md
+docu/
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
