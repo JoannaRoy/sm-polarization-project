@@ -18,6 +18,7 @@ infra/llamafile-0.10.0
 pseudocode.md
 todos.md
 docu/
+paper/
 
 # Frontend build
 frontend/node_modules/

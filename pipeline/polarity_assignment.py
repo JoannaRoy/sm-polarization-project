@@ -6,9 +6,10 @@ their claims keep ``polarity = NULL``.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 import logging
 from time import monotonic
+
+from tqdm import tqdm
 
 from config import LLM_CONCURRENCY
 from db import ArgumentInstance, Field, Polarity, connect
@@ -41,49 +42,6 @@ Decide:
 Return your response as JSON: {{"polarity": "agree"}} or {{"polarity": "disagree"}}"""
 
 
-@dataclass
-class BatchProgress:
-    total: int
-    start_time: float
-    completed: int = 0
-
-
-def format_duration(seconds):
-    seconds = int(seconds)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes:02d}m"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
-
-
-def progress_bar(completed, total, width=24):
-    if total == 0:
-        return "[" + "-" * width + "]"
-    filled = round(width * completed / total)
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
-
-
-def log_progress(progress, label):
-    progress.completed += 1
-    elapsed = monotonic() - progress.start_time
-    avg = elapsed / progress.completed
-    remaining = avg * (progress.total - progress.completed)
-    percent = 100 * progress.completed / progress.total if progress.total else 100
-    logger.info(
-        "%s %d/%d %.1f%% | elapsed %s | eta %s | %s",
-        progress_bar(progress.completed, progress.total),
-        progress.completed,
-        progress.total,
-        percent,
-        format_duration(elapsed),
-        format_duration(remaining),
-        label,
-    )
-
-
 def assign_claim_polarity(claim_text, topic_label, sub_topic_label, polarity_target):
     payload = chat_completion(
         messages=[
@@ -102,7 +60,7 @@ def assign_claim_polarity(claim_text, topic_label, sub_topic_label, polarity_tar
     return Polarity(payload[Field.POLARITY])
 
 
-def assign_polarity_for_sub_topic(conn, topic, sub_topic, progress=None):
+def assign_polarity_for_sub_topic(conn, topic, sub_topic, pbar=None):
     """Set polarity on every claim under this sub-topic that doesn't have one.
 
     LLM calls run concurrently up to ``LLM_CONCURRENCY``; DB writes happen on
@@ -148,11 +106,8 @@ def assign_polarity_for_sub_topic(conn, topic, sub_topic, progress=None):
             instance_id = future_to_id[future]
             polarity = future.result()
             set_claim_polarity(conn, instance_id, polarity)
-            if progress is not None:
-                log_progress(
-                    progress,
-                    f"sub-topic {sub_topic.id} {instance_id} -> {polarity}",
-                )
+            if pbar is not None:
+                pbar.update(1)
     return len(pending)
 
 
@@ -186,16 +141,16 @@ def run_batch():
             )
             .count()
         )
-    progress = BatchProgress(total=pending_total, start_time=start)
     logger.info(
         "Polarity assignment progress: %d sub-topics, %d claims missing polarity",
         len(work_items),
         pending_total,
     )
-    for topic, sub_topic in work_items:
-        assign_polarity_for_sub_topic(conn, topic, sub_topic, progress=progress)
+    with tqdm(total=pending_total, desc="claims", unit="claim") as pbar:
+        for topic, sub_topic in work_items:
+            assign_polarity_for_sub_topic(conn, topic, sub_topic, pbar=pbar)
     conn.close()
     logger.info(
         "Finished polarity assignment batch in %s",
-        format_duration(monotonic() - start),
+        tqdm.format_interval(monotonic() - start),
     )

@@ -20,6 +20,8 @@ from config import (
 from db import ArgumentInstance, Field, Polarity, RepresentativeStatement, connect
 from db.reads import get_topics
 from db.writes import replace_representative_statements
+from tqdm import tqdm
+
 from pipeline.utils.embeddings import embed_preference_texts, preference_embedder
 from pipeline.utils.llm import chat_completion
 
@@ -64,49 +66,6 @@ class SlateJob:
 class SlateResult:
     job: SlateJob
     slate_rows: tuple[dict, ...]
-
-
-@dataclass
-class BatchProgress:
-    total: int
-    start_time: float
-    completed: int = 0
-
-
-def format_duration(seconds):
-    seconds = int(seconds)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes:02d}m"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
-
-
-def progress_bar(completed, total, width=24):
-    if total == 0:
-        return "[" + "-" * width + "]"
-    filled = round(width * completed / total)
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
-
-
-def log_progress(progress, label):
-    progress.completed += 1
-    elapsed = monotonic() - progress.start_time
-    avg = elapsed / progress.completed
-    remaining = avg * (progress.total - progress.completed)
-    percent = 100 * progress.completed / progress.total if progress.total else 100
-    logger.info(
-        "%s %d/%d %.1f%% | elapsed %s | eta %s | %s",
-        progress_bar(progress.completed, progress.total),
-        progress.completed,
-        progress.total,
-        percent,
-        format_duration(elapsed),
-        format_duration(remaining),
-        label,
-    )
 
 
 def ask_llm(system_prompt, user_content):
@@ -287,7 +246,6 @@ def run_batch():
     conn = connect()
     topics = get_topics(conn)
     jobs = collect_jobs(conn, topics)
-    progress = BatchProgress(total=len(jobs), start_time=start)
     logger.info(
         "Slate generation progress: %d topics, %d slate jobs, concurrency=%d",
         len(topics),
@@ -301,17 +259,14 @@ def run_batch():
 
     with ThreadPoolExecutor(max_workers=LLM_CONCURRENCY) as pool:
         future_to_job = {pool.submit(run_slate_job, job): job for job in jobs}
-        for future in as_completed(future_to_job):
-            job = future_to_job[future]
+        for future in tqdm(
+            as_completed(future_to_job), total=len(jobs), desc="slates", unit="slate"
+        ):
             result = future.result()
             persist_result(conn, result)
-            log_progress(
-                progress,
-                f"sub-topic {job.sub_topic_id} {job.polarity} slate",
-            )
 
     conn.close()
     logger.info(
         "Finished slate generation batch in %s",
-        format_duration(monotonic() - start),
+        tqdm.format_interval(monotonic() - start),
     )

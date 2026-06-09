@@ -7,7 +7,6 @@ slate generation downstream.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 import logging
 from time import monotonic
 import uuid
@@ -35,6 +34,8 @@ from db.writes import (
     reset_sub_topic_state,
     update_sub_topic_centroids,
 )
+from tqdm import tqdm
+
 from pipeline.topic_clustering import OUTLIER_TOPIC
 from pipeline.utils.embeddings import embed_preference_texts
 from pipeline.utils.llm import chat_completion
@@ -81,49 +82,6 @@ Rules:
 - Only return null when the cluster is genuinely off-axis or descriptive - no shared proposition fits the majority.
 
 Return only the JSON object."""
-
-
-@dataclass
-class BatchProgress:
-    total: int
-    start_time: float
-    completed: int = 0
-
-
-def format_duration(seconds):
-    seconds = int(seconds)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes:02d}m"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
-
-
-def progress_bar(completed, total, width=24):
-    if total == 0:
-        return "[" + "-" * width + "]"
-    filled = round(width * completed / total)
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
-
-
-def log_progress(progress, label):
-    progress.completed += 1
-    elapsed = monotonic() - progress.start_time
-    avg = elapsed / progress.completed
-    remaining = avg * (progress.total - progress.completed)
-    percent = 100 * progress.completed / progress.total if progress.total else 100
-    logger.info(
-        "%s %d/%d %.1f%% | elapsed %s | eta %s | %s",
-        progress_bar(progress.completed, progress.total),
-        progress.completed,
-        progress.total,
-        percent,
-        format_duration(elapsed),
-        format_duration(remaining),
-        label,
-    )
 
 
 def normalize(vector):
@@ -242,7 +200,7 @@ def frame_sub_cluster(topic_label, sample_instances):
     return label, target
 
 
-def discover_sub_topics_for_topic(conn, topic, progress=None):
+def discover_sub_topics_for_topic(conn, topic):
     """Cluster the topic's claims, frame each sub-cluster via the LLM, persist.
 
     Sub-cluster framing LLM calls run concurrently up to ``LLM_CONCURRENCY``.
@@ -311,8 +269,6 @@ def discover_sub_topics_for_topic(conn, topic, progress=None):
             len(sub_cluster["instances"]),
         )
     update_sub_topic_centroids(conn, centroids)
-    if progress is not None:
-        log_progress(progress, f"topic {topic.id} -> {len(sub_clusters)} sub-topics")
     return len(sub_clusters)
 
 
@@ -329,17 +285,16 @@ def run_batch():
     logger.info("Resetting sub-topic state for %d topics", len(topic_ids))
     reset_sub_topic_state(conn, topic_ids)
 
-    progress = BatchProgress(total=len(topics), start_time=start)
     logger.info(
         "Sub-topic discovery progress: %d topics, concurrency=%d",
         len(topics),
         LLM_CONCURRENCY,
     )
-    for index, topic in enumerate(topics, start=1):
-        logger.info("Topic %d/%d: %s", index, len(topics), topic.label)
-        discover_sub_topics_for_topic(conn, topic, progress=progress)
+    for topic in tqdm(topics, desc="topics", unit="topic"):
+        logger.info("Topic: %s", topic.label)
+        discover_sub_topics_for_topic(conn, topic)
     conn.close()
     logger.info(
         "Finished sub-topic discovery batch in %s",
-        format_duration(monotonic() - start),
+        tqdm.format_interval(monotonic() - start),
     )

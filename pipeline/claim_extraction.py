@@ -3,7 +3,6 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -17,6 +16,8 @@ from db.writes import (
     mark_post_claims_extracted,
     store_claims,
 )
+from tqdm import tqdm
+
 from pipeline.utils.llm import LLMResponseError, chat_completion
 from pipeline.utils.post_parsing import normalize_posts
 from pipeline.topic_clustering import load_posts
@@ -72,49 +73,6 @@ Output: {"post_topic": "deployment", "claims": []}
 
 Post: "Should I get a cat or a dog?"
 Output: {"post_topic": "cats versus dogs", "claims": []}"""
-
-
-@dataclass
-class BatchProgress:
-    total: int
-    start_time: float
-    completed: int = 0
-
-
-def format_duration(seconds):
-    seconds = int(seconds)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours}h {minutes:02d}m"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
-
-
-def progress_bar(completed, total, width=24):
-    if total == 0:
-        return "[" + "-" * width + "]"
-    filled = round(width * completed / total)
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
-
-
-def log_progress(progress, label):
-    progress.completed += 1
-    elapsed = monotonic() - progress.start_time
-    avg = elapsed / progress.completed
-    remaining = avg * (progress.total - progress.completed)
-    percent = 100 * progress.completed / progress.total if progress.total else 100
-    logger.info(
-        "%s %d/%d %.1f%% | elapsed %s | eta %s | %s",
-        progress_bar(progress.completed, progress.total),
-        progress.completed,
-        progress.total,
-        percent,
-        format_duration(elapsed),
-        format_duration(remaining),
-        label,
-    )
 
 
 def record_failed_post(post_id, message):
@@ -213,7 +171,6 @@ def run_batch(data_path=None, resume=False):
         logger.info("Nothing to do; all posts already have claims_extracted_at set")
         return
 
-    progress = BatchProgress(total=len(pending), start_time=start)
     total_claims = 0
     posts_with_claims = 0
     failed_posts = 0
@@ -226,7 +183,9 @@ def run_batch(data_path=None, resume=False):
         future_to_post = {
             pool.submit(extract_claims, post[Field.TEXT]): post for post in pending
         }
-        for index, future in enumerate(as_completed(future_to_post), start=1):
+        for future in tqdm(
+            as_completed(future_to_post), total=len(pending), desc="claims", unit="post"
+        ):
             post = future_to_post[future]
             try:
                 claims = future.result()
@@ -244,15 +203,11 @@ def run_batch(data_path=None, resume=False):
                 total_claims += len(claims)
                 store_claims(conn, post[Field.ID], claims)
             mark_post_claims_extracted(conn, post[Field.ID])
-            log_progress(
-                progress,
-                f"post {index}/{len(pending)} {post[Field.ID]} ({len(claims)} claims)",
-            )
 
     conn.close()
     logger.info(
         "Finished claim extraction batch in %s: %d posts, %d with claims, %d total claims, %d failed",
-        format_duration(monotonic() - start),
+        tqdm.format_interval(monotonic() - start),
         len(pending),
         posts_with_claims,
         total_claims,
