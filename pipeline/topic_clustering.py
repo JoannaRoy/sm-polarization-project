@@ -29,11 +29,11 @@ from db.writes import (
     reset_topic_dependent_state,
     write_topic_assignments_for_claims,
 )
+from pipeline.utils.embeddings import claim_embedding_text, embed_semantic_texts
 from pipeline.utils.llm import chat_completion
 
 OUTLIER_TOPIC = -1
 logger = logging.getLogger(__name__)
-_topic_embedding_model = None
 
 TOPIC_FRAME_SCHEMA = {
     "type": "object",
@@ -83,32 +83,6 @@ def build_model():
     )
 
 
-def topic_embedder():
-    global _topic_embedding_model
-    if _topic_embedding_model is None:
-        logger.info("Loading topic embedding model %s", TOPIC_EMBEDDING_MODEL)
-        _topic_embedding_model = SentenceTransformer(TOPIC_EMBEDDING_MODEL)
-    return _topic_embedding_model
-
-
-def embed_topic_texts(texts):
-    return np.asarray(
-        topic_embedder().encode(
-            texts,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        ),
-        dtype=np.float32,
-    )
-
-
-def claim_embedding_text(claim_text, topic_sentence):
-    """Combine claim text and topic sentence so the topic signal isn't lost."""
-    if topic_sentence:
-        return f"{claim_text} | {topic_sentence}"
-    return claim_text
-
-
 def build_topic_centroids(topics, embeddings):
     centroids = {}
     for topic_id in sorted(set(topics)):
@@ -131,7 +105,7 @@ def train(claims, model_path=TOPIC_MODEL_PATH):
     logger.info("Training topic model on %d claims", len(claims))
 
     model = build_model()
-    text_embeddings = embed_topic_texts(texts)
+    text_embeddings = embed_semantic_texts(texts)
     topics, _ = model.fit_transform(texts, embeddings=text_embeddings)
     logger.info("Initial topic assignment produced %d topics", len(set(topics)))
 
@@ -194,7 +168,7 @@ def load_topic_centroids():
 
 def assign_topics_by_centroid(texts):
     topic_ids, centroids = load_topic_centroids()
-    embeddings = embed_topic_texts(texts)
+    embeddings = embed_semantic_texts(texts)
     scores = embeddings @ centroids.T
     return [topic_ids[index] for index in np.argmax(scores, axis=1)]
 
@@ -203,7 +177,7 @@ def top_topics_by_centroid(texts, k):
     """For each text, return up to ``k`` (topic_id, score) pairs sorted by
     descending cosine similarity to the persisted topic centroids."""
     topic_ids, centroids = load_topic_centroids()
-    embeddings = embed_topic_texts(texts)
+    embeddings = embed_semantic_texts(texts)
     scores = embeddings @ centroids.T
     limit = min(k, len(topic_ids))
     results = []

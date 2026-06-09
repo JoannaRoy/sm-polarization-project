@@ -1,4 +1,11 @@
-"""Shared embedding helpers for pipeline stages."""
+"""Shared embedding helpers for pipeline stages.
+
+Two embedding spaces are exposed: a *semantic* space (general sentence
+embedder, groups text by what it talks about) used by Stage 2 and Stage 3 for
+clustering, and a *preference* space (preference-aware embedder, groups text
+by what opinion it expresses) used by Stage 5 for the GSC DISC representation
+proxy.
+"""
 
 import logging
 from time import monotonic
@@ -11,11 +18,13 @@ from config import (
     PIPELINE_CPU_THREADS,
     PREFERENCE_EMBEDDING_DEVICE,
     PREFERENCE_EMBEDDING_MODEL,
+    TOPIC_EMBEDDING_MODEL,
 )
 
 logger = logging.getLogger(__name__)
 
 _preference_embedding_model = None
+_semantic_embedding_model = None
 _torch_threads_configured = False
 
 
@@ -69,3 +78,29 @@ def embed_preference_texts(texts):
         monotonic() - start,
     )
     return embeddings
+
+
+def semantic_embedder():
+    global _semantic_embedding_model
+    if _semantic_embedding_model is None:
+        logger.info("Loading semantic embedding model %s", TOPIC_EMBEDDING_MODEL)
+        _semantic_embedding_model = SentenceTransformer(TOPIC_EMBEDDING_MODEL)
+    return _semantic_embedding_model
+
+
+def embed_semantic_texts(texts):
+    return np.asarray(
+        semantic_embedder().encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ),
+        dtype=np.float32,
+    )
+
+
+def claim_embedding_text(claim_text, topic_sentence):
+    """Combine claim text and topic sentence so the topic signal isn't lost."""
+    if topic_sentence:
+        return f"{claim_text} | {topic_sentence}"
+    return claim_text

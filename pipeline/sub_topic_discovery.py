@@ -37,7 +37,7 @@ from db.writes import (
 from tqdm import tqdm
 
 from pipeline.topic_clustering import OUTLIER_TOPIC
-from pipeline.utils.embeddings import embed_preference_texts
+from pipeline.utils.embeddings import claim_embedding_text, embed_semantic_texts
 from pipeline.utils.llm import chat_completion
 
 logger = logging.getLogger(__name__)
@@ -224,13 +224,20 @@ def discover_sub_topics_for_topic(conn, topic):
         topic.id,
         topic.label,
     )
-    embeddings = embed_preference_texts([inst.text for inst in instances])
+    embeddings = embed_semantic_texts(
+        [claim_embedding_text(inst.text, inst.topic_sentence) for inst in instances]
+    )
     sub_clusters = cluster_instances(instances, embeddings)
 
     samples = [
         central_sample(
             sc["instances"],
-            embed_preference_texts([inst.text for inst in sc["instances"]]),
+            embed_semantic_texts(
+                [
+                    claim_embedding_text(inst.text, inst.topic_sentence)
+                    for inst in sc["instances"]
+                ]
+            ),
             sc["centroid"],
             SUBTOPIC_LLM_SAMPLE_SIZE,
         )
